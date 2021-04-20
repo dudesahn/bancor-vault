@@ -25,3 +25,4 @@ to claim your rewards, you call claimBalance(startIndex, endIndex) on the pool c
 - Is there any way around this?
 - Does IL protection work the same if you deposit BNT? 30-day, 100-day, etc?
 - what's the best way to view my start index and end index?
+- Can yearn stake/vote with our vBNT? Does Bancor feel one way or another about this?
