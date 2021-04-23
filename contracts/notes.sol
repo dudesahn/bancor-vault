@@ -45,6 +45,14 @@ Looking into the contracts, I have a few questions for interacting with the BNT 
 // more questions for Bancor
 - Is IL tracked on-chain? Would be great if we could determine how much a user should sacrifice (withdrawalLoss) if they withdraw early from the pool
 
+There is but it’s a bit involved -
+
+- access the protection store contract - 0xf5FAB5DBD2f3bf675dE4cB76517d4767013cfB55
+- get the list of position id for your account by calling protectedLiquidityIds(wallet)
+- call protectedLiquidity(id) for each id to find the one you’re interested in and keep that data
+- access the protection contract - 0x42743F4d9f139bfD04680Df50Bce2d7Dd8816F90
+- call the removeLiquidityReturn function - it requires a bunch of input including some of the data from the position as well as the current rate in the pool
+
 
 // Bancor's v2 LM document
 
