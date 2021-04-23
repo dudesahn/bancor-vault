@@ -42,6 +42,9 @@ Looking into the contracts, I have a few questions for interacting with the BNT 
 4. start/end indices are just 0 based indices for locked balances - you can query the count and then pass in (0, count - 1) or you can just call claimBalance(0, 100) - it's very unlikely that you have more than a few locked balances
 5. the LiquidityProtectionStore contract holds the metadata for these positions, so you can call protectedLiquidityIds(provider) to get the list and then query each one using protectedLiquidity(id)
 
+// more questions for Bancor
+- Is IL tracked on-chain? Would be great if we could determine how much a user should sacrifice (withdrawalLoss) if they withdraw early from the pool
+
 
 // Bancor's v2 LM document
 
