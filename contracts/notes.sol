@@ -20,6 +20,12 @@ to claim your rewards, you call claimBalance(startIndex, endIndex) on the pool c
 
 // if we create the BNT vault, could we also get some space in some of the other pools? Like, stablecoins?
 
+// BNT: have a normal method that withdraws if there's free BNT, but if we go above that (to an active pool) then have a setting on there that lets it know it needs to call x and then call y again 24 hours later
+// have it require something so that people can't withdraw, but then can signal x amount they want to withdraw
+// If I hit that point, then should probably withdraw the whole pool to make sure I have enough extra
+// - still need to call withdraw on rewards, and still need to claim my closed BNT position, but then I should be good
+
+
 // questions for bancor
 - Does claiming rewards reset your multiplier? 
 - Is there any way around this?
