@@ -15,6 +15,10 @@ pragma experimental ABIEncoderV2;
 // can sum up profit from each tend, then add it at the end if I decide we want to stay locked up, although will depend on what they do with slashing etc
 // perhaps could withdraw principal, but not do anything to rewards, and then lock back up to avoid missing bbonus
 
+// debt ratios will be weird for this vault, but if I don't call harvest, then the strategy can't update its debtratio and it should be fine. 
+
+// should I have a modifier in harvest that records profts and reinvests them automatically? probably not
+
     /* ========== CORE LIBRARIES ========== */
 
 import {
@@ -36,10 +40,12 @@ import {
 interface ILiquidityProtection {
     function addLiquidity(address poolAnchor, address reserveToken, uint256 amount) external payable returns (uint256);
     function removeLiquidity(uint256 id, uint32 portion) external;
+    function claimBalance(uint256 startIndex, uint256 endIndex) external; // claiming released BNT rewards after 24 hours, maybe this should always just be 0, 50?
 }
 
 interface IStakingRewards {
     function stakeRewards(uint256 maxAmount, address poolToken) external returns (uint256, uint256);
+    function claimRewards() external returns (uint256); // claim pending rewards, these are probably locked for 24 hours, I'm assuming
 }
 
 
