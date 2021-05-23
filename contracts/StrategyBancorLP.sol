@@ -19,6 +19,14 @@ pragma experimental ABIEncoderV2;
 
 // should I have a modifier in harvest that records profts and reinvests them automatically? probably not
 
+// when I deploy the vault, make sure to adjust the lockedProfitDegration to 100 days or so
+
+// keep 10% of funds in the vault, or in genlender? need to get BNT added to markets, then (CREAM would be a good one)
+
+// harvest should only collect the freed up BNT, need something else to call like startStrategyWithdrawalTimer, 24 hours after that is called we can now harvest (harvest reverts if called before)
+// would then also need something in the harvest call to check if there are any funds in LP (probably just have a boolean or 1/0 that we can manually set or automatically flips after previous call,
+// since we're only doing 1 harvest before withdrawing everything)
+
     /* ========== CORE LIBRARIES ========== */
 
 import {
@@ -68,6 +76,7 @@ contract StrategyBancorLP is BaseStrategy {
     uint256 public tendsPerHarvest = 0; // how many tends we call before we harvest. set to 0 to never call tends.
     uint256 internal harvestNow = 0; // 0 for false, 1 for true if we are mid-harvest
     uint256 public manualKeep3rHarvest = 0;
+    bool public withdrawalsLocked
 
     /* ========== CONSTRUCTOR ========== */
 
