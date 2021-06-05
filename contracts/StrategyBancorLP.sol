@@ -259,6 +259,11 @@ contract StrategyBancorLP is BaseStrategy {
         }
     }
 
+    function liquidateAllPositions() internal override returns (uint256) {
+        // TODO: Liquidate all positions and return the amount freed.
+        return want.balanceOf(address(this));
+    }
+
     // NOTE: Can override `tendTrigger` and `harvestTrigger` if necessary
 
     function prepareMigration(address _newStrategy) internal override {
@@ -266,25 +271,37 @@ contract StrategyBancorLP is BaseStrategy {
         // NOTE: `migrate` will automatically forward all `want` in this strategy to the new one
     }
 
-    // Override this to add all tokens/tokenized positions this contract manages
-    // on a *persistent* basis (e.g. not just for swapping back to want ephemerally)
-    // NOTE: Do *not* include `want`, already included in `sweep` below
-    //
-    // Example:
-    //
-    //    function protectedTokens() internal override view returns (address[] memory) {
-    //      address[] memory protected = new address[](3);
-    //      protected[0] = tokenA;
-    //      protected[1] = tokenB;
-    //      protected[2] = tokenC;
-    //      return protected;
-    //    }
     function protectedTokens()
         internal
         view
         override
         returns (address[] memory)
     {}
+    
+    /**
+     * @notice
+     *  Provide an accurate conversion from `_amtInWei` (denominated in wei)
+     *  to `want` (using the native decimal characteristics of `want`).
+     * @dev
+     *  Care must be taken when working with decimals to assure that the conversion
+     *  is compatible. As an example:
+     *
+     *      given 1e17 wei (0.1 ETH) as input, and want is USDC (6 decimals),
+     *      with USDC/ETH = 1800, this should give back 1800000000 (180 USDC)
+     *
+     * @param _amtInWei The amount (in wei/1e-18 ETH) to convert to `want`
+     * @return The amount in `want` of `_amtInEth` converted to `want`
+     **/
+    function ethToWant(uint256 _amtInWei)
+        public
+        view
+        virtual
+        override
+        returns (uint256)
+    {
+        // TODO create an accurate price oracle
+        return _amtInWei;
+    }
     
     /* ========== KEEP3RS ========== */
     
