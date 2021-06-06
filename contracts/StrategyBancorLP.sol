@@ -8,31 +8,14 @@ pragma experimental ABIEncoderV2;
 // should add a way so that pricePerShare increases over 10 days after each harvest
 // maybe worth compounding rewards in the pools during the 100 days
 
-// tend can compound rewards, could append to an array using push
-// for each i in array, call withdraw
-
 // keepers will never call harvest on these strategies, only tend to compound BNT
-// can sum up profit from each tend, then add it at the end if I decide we want to stay locked up, although will depend on what they do with slashing etc
-// perhaps could withdraw principal, but not do anything to rewards, and then lock back up to avoid missing bbonus
-
 // debt ratios will be weird for this vault, but if I don't call harvest, then the strategy can't update its debtratio and it should be fine. 
-
-// should I have a modifier in harvest that records profts and reinvests them automatically? probably not
-
-// when I deploy the vault, make sure to adjust the lockedProfitDegration to 100 days or so
-
 // keep 10% of funds in the vault, or in genlender? need to get BNT added to markets, then (CREAM would be a good one)
-
-// harvest should only collect the freed up BNT, need something else to call like startStrategyWithdrawalTimer, 24 hours after that is called we can now harvest (harvest reverts if called before)
-// would then also need something in the harvest call to check if there are any funds in LP (probably just have a boolean or 1/0 that we can manually set or automatically flips after previous call,
-// since we're only doing 1 harvest before withdrawing everything)
 
 // PLAN
 // Call tend throughout a LP pair's run to 100 days
 
-
-
-// whenever we deploy or clone, make sure to do setLockedProfitDegradation(), set it to some amount
+// whenever we deploy or clone, make sure to do setLockedProfitDegradation(), set it to some amount relatively high, although it seems to be reset by every harvest call from any strat
 // also need to set maxDebtPerHarvest = 0 for these strategies once they're live
 // and can set debtRatio = 0 as well for in-progress strats as well; as long as I don't harvest those strategies
 // have a specific 
@@ -93,10 +76,12 @@ contract StrategyBancorLP is BaseStrategy {
     address internal protectionStore = 0xf5FAB5DBD2f3bf675dE4cB76517d4767013cfB55;
 
     uint256 internal harvestNow = 0; // 0 for false, 1 for true if we are mid-harvest
-    uint256 public manualKeep3rHarvest = 0;
-    uint256 public liquidityUnlockedAt; // timestamp that our BNT is unlocked
+    uint256 public tendCounter; // track our tendies
+    uint256 public tendsPerHarvest; // how many tends we call before we harvest. set to 0 to never call tends.
+    uint256 internal bntDeposited; // this is our starting locked rewards that we need to claim; can get rid of this if there's a better way to read 
+    uint256 public unlockStart; // this is the timestamp that our withdrawal unlock began
+    uint256 internal poolDepositTimestamp; // this is the timestamp at which our initial position was created
     bool public isUnlocking = false; // this means that our BNT is currently unlocking in a 24-hour cooldown
-    uint256 internal bntDeposited; // this is our starting locked rewards that we need to claim 
 
     /* ========== CONSTRUCTOR ========== */
 
@@ -105,11 +90,7 @@ contract StrategyBancorLP is BaseStrategy {
         // maxReportDelay = 6300;
         // profitFactor = 100;
         // debtThreshold = 0;
-        
-        // approve want token on liquidityProtection 
-        want.approve(liquidityProtection, uint256(-1)); // needed for depositing BNT to LP
-        vBNT.approve(liquidityProtection, uint256(-1)); // needed for retrieving BNT from LP
-        poolAnchor = address(_poolAnchor); // set this from constructor/cloning
+    
         
     }
 
@@ -134,6 +115,12 @@ contract StrategyBancorLP is BaseStrategy {
     	}
     	return false;
     }
+
+    // returns the amount of time remaining (in seconds) until our BNT position reaches 100 days and 100% IL protection
+    function timeToFullyProtected() public view returns (bool) {
+    	8640000.sub(block.timestamp.sub(poolDepositTimestamp));
+    }
+    
 
     /* ========== MUTATIVE FUNCTIONS ========== */
 
@@ -193,14 +180,21 @@ contract StrategyBancorLP is BaseStrategy {
         			// deposit our liquidity to the Protected LP and store what our id is; but actually I might not need to store the id for the withdrawals
         			bntDeposited = want.balanceOf(address(this));
         			id = ILiquidityProtection(liquidityProtection).addLiquidity(poolAnchor, address(want), toDeposit);
+        			poolDepositTimestamp = block.timestamp;
         		}
         	}
-            // since this is part of a harvest call, reset our counter to zero
+            // since we've completed our harvest call, reset our tend counter and our harvest now
+            tendCounter = 0;
             harvestNow = 0;
         }
         } else {
             // This is our tend call, which compounds our rewards for us
             IStakingRewards(stakingRewards).stakeRewards(type(uint256).max, poolAnchor);
+            
+            // increase our tend counter by 1 so we can know when we should harvest again
+            uint256 previousTendCounter = tendCounter;
+            tendCounter = previousTendCounter.add(1);
+            
         }
     }
 
@@ -228,14 +222,18 @@ contract StrategyBancorLP is BaseStrategy {
             _liquidatedAmount = _amountNeeded;
         }
     }
-
+    
+    // liquidate all of our assets to be returned to the vault
     function liquidateAllPositions() internal override returns (uint256) {
-        // TODO: Liquidate all positions and return the amount freed.
+        require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
+        ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
+        isUnlocking = false;
+        bntDeposited = 0;
         return want.balanceOf(address(this));
     }
 
+    // Withdraw all liquidity, begin 24-hour cooldown to claim BNT
     function removeAllLiquidity() external onlyAuthorized {
-        // Withdraw all liquidity, begin 24-hour cooldown to claim BNT
         uint256[] myPools = IProtectionStore(protectionStore).protectedLiquidityIds(address(this));
         if (myPools[0] > 0) {
         	for (uint256 i=0; i<myPools.length; i++) {
@@ -304,9 +302,6 @@ contract StrategyBancorLP is BaseStrategy {
         returns (bool)
     {
         StrategyParams memory params = vault.strategies(address(this));
-        
-        // have a manual toggle switch if needed since keep3rs are more efficient than manual harvest. run this at the beginning, and the end of this 
-        if (manualKeep3rHarvest == 1) return true;
 
         // Should not trigger if Strategy is not activated
         if (params.activation == 0) return false;
@@ -355,7 +350,19 @@ contract StrategyBancorLP is BaseStrategy {
         view
         override
         returns (bool)
-    {	return false;
+    {
+        StrategyParams memory params = vault.strategies(address(this));
+        // Tend should trigger once it has been the minimum time between harvests divided by 1+tendsPerHarvest to space out tends equally
+        // we multiply this number by the current tendCounter+1 to know where we are in time
+        // we are assuming here that keepers will essentially call tend as soon as this is true
+        if (
+            block.timestamp.sub(params.lastReport) >
+            (
+                minReportDelay.div(
+                    ((tendsPerHarvest.add(1)).mul(tendCounter.add(1))
+                )
+            )
+        ) return true;
     }
 
     
@@ -370,10 +377,18 @@ contract StrategyBancorLP is BaseStrategy {
     // Set the liquidity protection that we want to deposit to in case it changes; this allows the strategy to be agnostic to which pool it deposits to
     function setliquidityProtection(address _liquidityProtection) external onlyGov {
         liquidityProtection = _liquidityProtection;
+        want.approve(liquidityProtection, type(uint256).max); // needed for depositing BNT to LP
+        vBNT.approve(liquidityProtection, type(uint256).max); // needed for retrieving BNT from LP
     }  
-    
-    
 
+    // set number of tends before we call our next harvest
+    function setTendsPerHarvest(uint256 _tendsPerHarvest)
+        external
+        onlyAuthorized
+    {
+        tendsPerHarvest = _tendsPerHarvest;
+    }
+    
     /* ========== CLONING ========== */
 
 	// this is the constructor from a strategy for doing cloning. seems I should just put everything from the constructor into the initialize function, 
@@ -403,7 +418,7 @@ contract StrategyBancorLP is BaseStrategy {
 
         vault = VaultAPI(_vault);
         want = IERC20(vault.token());
-        want.safeApprove(_vault, uint256(-1)); // Give Vault unlimited access (might save gas)
+        want.safeApprove(_vault, type(uint256).max); // Give Vault unlimited access (might save gas)
         strategist = _strategist;
         rewards = _rewards;
         keeper = _keeper;
@@ -422,17 +437,25 @@ contract StrategyBancorLP is BaseStrategy {
 
         token0 = ISushiswapPair(address(want)).token0();
         token1 = ISushiswapPair(address(want)).token1();
-        IERC20(want).safeApprove(masterchef, uint256(-1));
-        IERC20(sushi).safeApprove(xsushi, uint256(-1));
-        IERC20(xsushi).safeApprove(xSushiVault, uint256(-1));
+        IERC20(want).safeApprove(masterchef, type(uint256).max);
+        IERC20(sushi).safeApprove(xsushi, type(uint256).max);
+        IERC20(xsushi).safeApprove(xSushiVault, type(uint256).max);
         debtThreshold = 100 * 1e18;
         
-        vault.approve(rewards, uint256(-1)); // Allow rewards to be pulled
+        vault.approve(rewards, type(uint256).max); // Allow rewards to be pulled
+        
+        minReportDelay = 8640000; // 100 days in seconds
+        maxReportDelay = 8640000*2; // 200 days in seconds
+        debtThreshold = 1000 * 1e18; // we shouldn't ever have debt, but set a bit of a buffer
+        profitFactor = 4000; // in this strategy, profitFactor is only used for telling keep3rs when to move funds from vault to strategy (what previously was an earn call)
         
         
         // here's the stuff I know I need to do for Bancor
         poolAnchor = IConverterRegistry(converterRegistry).getConvertibleTokenAnchors(_targetPoolToken); // for instance, LINK address would be the targetPoolToken for the LINK/BNT pool
         
+        // approve want token on liquidityProtection 
+        want.approve(liquidityProtection, type(uint256).max); // needed for depositing BNT to LP
+        vBNT.approve(liquidityProtection, type(uint256).max); // needed for retrieving BNT from LP
         
         
     }
