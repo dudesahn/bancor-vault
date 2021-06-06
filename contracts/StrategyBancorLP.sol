@@ -37,6 +37,8 @@ pragma experimental ABIEncoderV2;
 // and can set debtRatio = 0 as well for in-progress strats as well; as long as I don't harvest those strategies
 // have a specific 
 
+// make sure that PPS won't get super weird during the 24 hours when I'm waiting to claim. Need to find a way to view the strategy's locked balance waiting to be claimed
+
     /* ========== CORE LIBRARIES ========== */
 
 import {
@@ -94,6 +96,7 @@ contract StrategyBancorLP is BaseStrategy {
     uint256 public manualKeep3rHarvest = 0;
     uint256 public liquidityUnlockedAt; // timestamp that our BNT is unlocked
     bool public isUnlocking = false; // this means that our BNT is currently unlocking in a 24-hour cooldown
+    uint256 internal bntDeposited; // this is our starting locked rewards that we need to claim 
 
     /* ========== CONSTRUCTOR ========== */
 
@@ -118,6 +121,7 @@ contract StrategyBancorLP is BaseStrategy {
     }
 
     function estimatedTotalAssets() public view override returns (uint256) {
+    	if (isUnlocking) return bntDeposited;
         // add up how much BNT we've put into strategies; that's it. this should be able to be represented by our balance of vBNT
         // we shouldn't have any BNT sitting in the strategy but in case we do, include it
         return vBNT.balanceOf(address(this)).add(want.balanceOf(address(this)));
@@ -181,34 +185,23 @@ contract StrategyBancorLP is BaseStrategy {
         if (emergencyExit) {
             return;
         }
-        if (harvestNow == 1) {
+        if (harvestNow == 1) { // this means we are in the middle of a harvest call
     		// need to check if we are already holding vBNT, if so we shouldn't be depositing anything and should only be withdrawing
-    		if (vBNT.balanceOf(address(this)) == 0) {
+    		if (vBNT.balanceOf(address(this)) == 0) { // vBNT = 0 means we haven't deposited to a pool yet
         		// check to see if we have anything to deposit
         		if (want.balanceOf(address(this)) > 0) {
-        			// deposit our liquidity to the Protected LP and store what our id is; but actually I might not need to do this for the withrdawals
+        			// deposit our liquidity to the Protected LP and store what our id is; but actually I might not need to store the id for the withdrawals
+        			bntDeposited = want.balanceOf(address(this));
         			id = ILiquidityProtection(liquidityProtection).addLiquidity(poolAnchor, address(want), toDeposit);
         		}
         	}
-            // if this is part of a harvest call, reset our counter to zero
+            // since this is part of a harvest call, reset our counter to zero
             harvestNow = 0;
         }
         } else {
             // This is our tend call, which compounds our rewards for us
             IStakingRewards(stakingRewards).stakeRewards(type(uint256).max, poolAnchor);
         }
-        if (tendOnly) { // this means that we aren't depositing anymore funds into our strategy
-        
-        
-        }
-
-        
-        // add in something here for tends, perhaps—allow us to call stakeReward which compounds earned BNT
-    }
-
-
-
-
     }
 
     function liquidatePosition(uint256 _amountNeeded)
@@ -216,21 +209,16 @@ contract StrategyBancorLP is BaseStrategy {
         override
         returns (uint256 _liquidatedAmount, uint256 _loss)
     {
-        // TODO: Do stuff here to free up to `_amountNeeded` from all positions back into `want`
-        // NOTE: Maintain invariant `want.balanceOf(this) >= _liquidatedAmount`
-        // NOTE: Maintain invariant `_liquidatedAmount + _loss <= _amountNeeded`
 
-		uint32 _portion = 1000000; // fraction of liquidity (in ppm) we need to remove
 		// should I just always do 100% and then have the new pool be for withdrawals? probably yes, move it all to genLender
-
 		// boost resets on that strategy anyway if we withdraw from it, so may as well free up the whole damn thing
 		// so typically, genLender holds ~10%, when a new strategy hits 100 days it removes all funds and cycles them
 		// realistically don't want to be withdrawing much of anything from highest-earning pools, so instead can just check frequently and re-arrange w/d queue based on yield
-        ILiquidityProtection(liquidityProtection).removeLiquidity(id, _portion);
         
     	require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
         isUnlocking = false;
+        bntDeposited = 0;
 
         uint256 totalAssets = want.balanceOf(address(this));
         if (_amountNeeded > totalAssets) {
@@ -261,7 +249,10 @@ contract StrategyBancorLP is BaseStrategy {
 	// realistically only meant to be used in emergent situations
     function claimLiquidity() external onlyAuthorized {
     	// claim any unlocked BNT balance we have
+    	require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
+        isUnlocking = false;
+        bntDeposited = 0;
     }
 
     // prepare our want token to migrate to a new strategy if needed
@@ -269,6 +260,7 @@ contract StrategyBancorLP is BaseStrategy {
     	require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
         isUnlocking = false;
+        bntDeposited = 0;
     }
 
     function protectedTokens()
