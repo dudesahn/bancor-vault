@@ -57,6 +57,8 @@ interface IConverterRegistry {
 
 interface IProtectionStore {
 	function protectedLiquidityIds(IERC20 _convertibleToken) external view returns (address[] memory);
+	function lockedBalance(address _provider, uint256 _index) external view returns (uint256, uint256);
+	function lockedBalanceCount(address _provider) external view returns (uint256);
 }
 
 contract StrategyBancorLP is BaseStrategy {
@@ -70,15 +72,14 @@ contract StrategyBancorLP is BaseStrategy {
     address public poolAnchor; // This is the pool we're targeting, should be set in constructor/cloning
     // for bancor's purposes, reserveToken will always be our want token
     IERC20 internal constant vBNT = IERC20(0x48fb253446873234f2febbf9bdeaa72d9d387f94); // this is Bancor's voting token that you receive in exchange for LPing
-    uint256 public id; // this is the pool id of our pool we deposit to, will only be doing 1 deposit per strategy so shouldn't be an issue
+    uint256 internal id; // this is the pool id of our pool we deposit to, will only be doing 1 deposit per strategy so shouldn't be an issue
     address internal constant stakingRewards = 0x4B90695C2013FC60df1e168c2bCD4Fd12f5C9841; // This is the Bancor staking rewards contract
     address internal constant converterRegistry = 0xC0205e203F423Bcd8B2a4d6f8C8A154b0Aa60F19; // bancor's registry for finding pool anchors
     address internal protectionStore = 0xf5FAB5DBD2f3bf675dE4cB76517d4767013cfB55;
 
     uint256 internal harvestNow = 0; // 0 for false, 1 for true if we are mid-harvest
     uint256 public tendCounter; // track our tendies
-    uint256 public tendsPerHarvest; // how many tends we call before we harvest. set to 0 to never call tends.
-    uint256 internal bntDeposited; // this is our starting locked rewards that we need to claim; can get rid of this if there's a better way to read 
+    uint256 public tendsPerHarvest = 20; // how many tends we call before we harvest. set to 0 to never call tends. 20 will compound every ~5 days
     uint256 public unlockStart; // this is the timestamp that our withdrawal unlock began
     uint256 internal poolDepositTimestamp; // this is the timestamp at which our initial position was created
     bool public isUnlocking = false; // this means that our BNT is currently unlocking in a 24-hour cooldown
@@ -90,8 +91,6 @@ contract StrategyBancorLP is BaseStrategy {
         // maxReportDelay = 6300;
         // profitFactor = 100;
         // debtThreshold = 0;
-    
-        
     }
 
     /* ========== VIEWS ========== */
@@ -102,9 +101,10 @@ contract StrategyBancorLP is BaseStrategy {
     }
 
     function estimatedTotalAssets() public view override returns (uint256) {
-    	if (isUnlocking) return bntDeposited;
         // add up how much BNT we've put into strategies; that's it. this should be able to be represented by our balance of vBNT
         // we shouldn't have any BNT sitting in the strategy but in case we do, include it
+        // check to see if we have any locked positions, and if so, include them
+        if (IProtectionStore(protectionStore).lockedBalanceCount(address(this)) > 0) return vBNT.balanceOf(address(this)).add(want.balanceOf(address(this))).add(IProtectionStore(protectionStore).lockedBalance(address(this), id));
         return vBNT.balanceOf(address(this)).add(want.balanceOf(address(this)));
     }
     
@@ -144,6 +144,7 @@ contract StrategyBancorLP is BaseStrategy {
         
         if (bntIsClaimable()) {
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100); // claim any unlocked BNT balance we have
+        IStakingRewards(stakingRewards).claimRewards(); // claim any pending BNT rewards we have
         }
         
         // serious loss should never happen, but if it does (for instance, if Curve is hacked), let's record it accurately
@@ -178,7 +179,6 @@ contract StrategyBancorLP is BaseStrategy {
         		// check to see if we have anything to deposit
         		if (want.balanceOf(address(this)) > 0) {
         			// deposit our liquidity to the Protected LP and store what our id is; but actually I might not need to store the id for the withdrawals
-        			bntDeposited = want.balanceOf(address(this));
         			id = ILiquidityProtection(liquidityProtection).addLiquidity(poolAnchor, address(want), toDeposit);
         			poolDepositTimestamp = block.timestamp;
         		}
@@ -211,8 +211,8 @@ contract StrategyBancorLP is BaseStrategy {
         
     	require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
+        IStakingRewards(stakingRewards).claimRewards(); // claim any pending BNT rewards we have
         isUnlocking = false;
-        bntDeposited = 0;
 
         uint256 totalAssets = want.balanceOf(address(this));
         if (_amountNeeded > totalAssets) {
@@ -227,8 +227,8 @@ contract StrategyBancorLP is BaseStrategy {
     function liquidateAllPositions() internal override returns (uint256) {
         require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
+        IStakingRewards(stakingRewards).claimRewards(); // claim any pending BNT rewards we have
         isUnlocking = false;
-        bntDeposited = 0;
         return want.balanceOf(address(this));
     }
 
@@ -245,20 +245,19 @@ contract StrategyBancorLP is BaseStrategy {
     }
 
 	// realistically only meant to be used in emergent situations
-    function claimLiquidity() external onlyAuthorized {
+    function claimLiquidity(bool _claimRewards) external onlyAuthorized {
     	// claim any unlocked BNT balance we have
-    	require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
+        if (_claimRewards) IStakingRewards(stakingRewards).claimRewards(); // claim any pending BNT rewards we have
         isUnlocking = false;
-        bntDeposited = 0;
     }
 
     // prepare our want token to migrate to a new strategy if needed
     function prepareMigration(address _newStrategy) internal override {
     	require(bntIsClaimable(), "Must wait until BNT is claimable to withdraw.");
         ILiquidityProtection(liquidityProtection).claimBalance(0, 100);
+        IStakingRewards(stakingRewards).claimRewards(); // claim any pending BNT rewards we have
         isUnlocking = false;
-        bntDeposited = 0;
     }
 
     function protectedTokens()
@@ -353,7 +352,7 @@ contract StrategyBancorLP is BaseStrategy {
     {
         StrategyParams memory params = vault.strategies(address(this));
         // Tend should trigger once it has been the minimum time between harvests divided by 1+tendsPerHarvest to space out tends equally
-        // we multiply this number by the current tendCounter+1 to know where we are in time
+        // we multiply this number by the current tendCounter+1 to know when the next tend should be
         // we are assuming here that keepers will essentially call tend as soon as this is true
         if (
             block.timestamp.sub(params.lastReport) >
